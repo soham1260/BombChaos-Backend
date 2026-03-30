@@ -62,6 +62,35 @@ export class GameState {
         });
     }
 
+    // Generates the 15x13 grid with indestructible walls and soft blocks.
+    _generateGrid() {
+        const grid = [];
+        for (let y = 0; y < GRID_HEIGHT; y++) {
+            const row = [];
+            for (let x = 0; x < GRID_WIDTH; x++) {
+                if (x === 0 || x === GRID_WIDTH - 1 || y === 0 || y === GRID_HEIGHT - 1) { // make border as wall
+                    row.push(TILE.WALL);
+                } else if (x % 2 === 0 && y % 2 === 0) { // make inner grid as wall
+                    row.push(TILE.WALL);
+                } else if (this._isSpawnSafe(x, y)) { // make spawn positions and two tile radius around it as empty
+                    row.push(TILE.EMPTY);
+                } else {
+                    row.push(this.rng() < 0.60 ? TILE.SOFT : TILE.EMPTY);
+                }
+            }
+            grid.push(row);
+        }
+        return grid;
+    }
+
+    // Returns true if tile should be kept empty for spawn safety (2-tile radius from corners).
+    _isSpawnSafe(x, y) {
+        for (const sp of SPAWN_POSITIONS) {
+            if (Math.abs(x - sp.x) + Math.abs(y - sp.y) <= 2) return true;
+        }
+        return false;
+    }
+
     serialize() {
         return {
             tickCount: this.tickCount,

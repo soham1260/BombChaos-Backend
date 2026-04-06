@@ -77,9 +77,47 @@ io.on('connection', (socket) => {
         console.log(`[Room] ${socket.id} joined ${upperCode}`);
         ack?.({ success: true, code: upperCode });
     });
+
+    // player_ready
+    socket.on('player_ready', () => {
+        const room = _getRoom(socket.id);
+        if (!room || room.phase !== 'lobby') return;
+        room.toggleReady(socket.id);
+        broadcastRoomUpdate(room);
+    });
+
+    // select_character
+    socket.on('select_character', ({ character } = {}) => {
+        const room = _getRoom(socket.id);
+        if (!room || room.phase !== 'lobby') return;
+        room.selectCharacter(socket.id, character);
+        broadcastRoomUpdate(room);
+    });
+
+    // start_game
+    socket.on('start_game', (_, ack) => {
+        const room = _getRoom(socket.id);
+        if (!room) return ack?.({ success: false, error: 'Not in a room' });
+
+        const result = room.startGame(socket.id);
+        if (!result.success) return ack?.({ success: false, error: result.error });
+
+        io.to(room.code).emit('game_start', {
+            mapSeed: result.mapSeed,
+            playerIds: result.playerIds,
+            players: room.serializeLobby().players,
+        });
+        console.log(`[Game] Room ${room.code} started with seed ${result.mapSeed}`);
+        ack?.({ success: true });
+    });
+
+    function _getRoom(socketId) {
+        const code = socketRoom.get(socketId);
+        return code ? rooms.get(code) : null;
+    }
 });
 
-// ─── Start ───────────────────────────────────────────────────────────────────
+// Start
 httpServer.listen(PORT, () => {
     console.log(`🚀 BOMB CHAOS server running on http://localhost:${PORT}`);
 });

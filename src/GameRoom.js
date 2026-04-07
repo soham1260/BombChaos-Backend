@@ -94,6 +94,77 @@ export class GameRoom {
         if (player && CHARACTERS.includes(character)) player.character = character;
     }
     
+    startGame(socketId) {
+        if (socketId !== this.hostId) return { success: false, error: 'Only host can start' };
+        if (this.players.size < MIN_PLAYERS_TO_START) {
+            return { success: false, error: 'Need at least 2 players' };
+        }
+        const notReady = [...this.players.values()].filter(p => !p.isHost && !p.ready);
+        if (notReady.length > 0) return { success: false, error: 'All players must be ready' };
+
+        this.phase = 'game';
+        const mapSeed = Math.floor(Math.random() * 0xFFFFFF);
+
+        // Sort players by slotIndex so their positions match slot order
+        const playerIds = [...this.players.values()]
+            .sort((a, b) => a.slotIndex - b.slotIndex)
+            .map(p => p.id);
+
+        this.gameState = new GameState(mapSeed, playerIds);
+        this._startTickLoop();
+
+        return { success: true, mapSeed, playerIds };
+    }
+
+    // Game Loop
+
+    // Start 60 Hz tick loop
+    _startTickLoop() {
+        this._tickInterval = setInterval(() => this._tick(), TICK_MS);
+    }
+
+    _stopTickLoop() {
+        if (this._tickInterval) {
+            clearInterval(this._tickInterval);
+            this._tickInterval = null;
+        }
+    }
+
+    // One game tick: apply moves, advance state, broadcast updates
+    _tick() {
+        if (!this.gameState) return;
+
+        const events = this.gameState.tick(this._pendingMoves);
+        this._pendingMoves.clear();
+
+        const serialized = this.gameState.serialize();
+
+        this.io.to(this.code).emit('game_state_update', serialized);
+
+        for (const explosion of events.explosions) {
+            this.io.to(this.code).emit('explosion', explosion);
+        }
+        for (const elim of events.eliminated) {
+            this.io.to(this.code).emit('player_eliminated', elim);
+        }
+        for (const pu of events.powerupCollections) {
+            this.io.to(this.code).emit('power_up_collected', pu);
+        }
+
+        if (this.gameState.gameOver) {
+            this._stopTickLoop();
+            this.phase = 'results';
+            const scoreboard = this._buildScoreboard();
+            this.io.to(this.code).emit('game_over', {
+                winnerId: this.gameState.winnerId,
+                scoreboard,
+            });
+            if (this._onGameOver) {
+                this._onGameOver(this.gameState.winnerId, this).catch(() => {});
+            }
+        }
+    }
+
     serializeLobby() {
         return {
             code: this.code,

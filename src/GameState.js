@@ -91,6 +91,47 @@ export class GameState {
         return false;
     }
 
+    placeBomb(playerId) {
+        const player = this.players.get(playerId);
+        if (!player || !player.alive) return null;
+        if (player.activeBombs >= player.stats.maxBombs) return null;
+
+        const tx = player.tileX;
+        const ty = player.tileY;
+
+        // Check no bomb already here
+        for (const bomb of this.bombs.values()) {
+            if (bomb.x === tx && bomb.y === ty) return null;
+        }
+
+        const bombId = `bomb_${++this._bombCounter}`;
+        const bomb = {
+            id: bombId,
+            ownerId: playerId,
+            x: tx,
+            y: ty,
+            range: player.stats.bombRange,
+            ticksLeft: BOMB_FUSE_TICKS,
+            piercingFlame: player.stats.hasPiercingFlame,
+        };
+        this.bombs.set(bombId, bomb);
+        player.activeBombs++;
+        player.bombsPlaced++;
+        return bomb;
+    }
+
+    detonateRemote(playerId, events) {
+        const player = this.players.get(playerId);
+        if (!player || !player.stats.hasRemoteBomb) return;
+        // Detonate the OLDEST bomb belonging to this player
+        for (const [bombId, bomb] of this.bombs) {
+            if (bomb.ownerId === playerId) {
+                this._detonateBomb(bombId, events);
+                break;
+            }
+        }
+    }
+
     serialize() {
         return {
             tickCount: this.tickCount,

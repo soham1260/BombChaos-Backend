@@ -132,6 +132,31 @@ export class GameState {
         }
     }
 
+    tick(playerMoves) {
+        if (this.gameOver) return { explosions: [], eliminated: [], powerupCollections: [] };
+
+        this.tickCount++;
+        const events = { explosions: [], eliminated: [], powerupCollections: [] };
+
+        this._applyMovement(playerMoves);
+
+        this._tickBombs(events);
+
+        this._tickFires();
+
+        this._checkFireCollisions(events);
+
+        this._checkPowerupCollection(events);
+
+        for (const player of this.players.values()) {
+            if (player.alive) player.survivalTicks++;
+        }
+
+        this._checkWinCondition();
+
+        return events;
+    }
+
     serialize() {
         return {
             tickCount: this.tickCount,

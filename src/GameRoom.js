@@ -165,6 +165,37 @@ export class GameRoom {
         }
     }
 
+    // Queue a move update from a player to be processed on next tick
+    queueMove(socketId, move) {
+        if (!this.gameState || !this.gameState.players.has(socketId)) return;
+        this._pendingMoves.set(socketId, {
+            dx: Math.sign(move.dx || 0),
+            dy: Math.sign(move.dy || 0),
+        });
+    }
+    
+    placeBomb(socketId) {
+        if (!this.gameState) return null;
+        return this.gameState.placeBomb(socketId);
+    }
+
+    detonateRemote(socketId) {
+        if (!this.gameState) return;
+        const events = { explosions: [], eliminated: [], powerupCollections: [] };
+        this.gameState.detonateRemote(socketId, events);
+
+        // Emit explosion events immediately
+        for (const explosion of events.explosions) {
+            this.io.to(this.code).emit('explosion', explosion);
+        }
+        for (const elim of events.eliminated) {
+            this.io.to(this.code).emit('player_eliminated', elim);
+        }
+        for (const pu of events.powerupCollections) {
+            this.io.to(this.code).emit('power_up_collected', pu);
+        }
+    }
+
     serializeLobby() {
         return {
             code: this.code,

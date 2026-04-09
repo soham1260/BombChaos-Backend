@@ -132,6 +132,109 @@ export class GameState {
         }
     }
 
+    _applyMovement(playerMoves) {
+        const dt = 1 / 60; // seconds per tick
+        const RADIUS = Math.floor(TILE_SIZE * 0.50);
+
+        for (const [id, move] of playerMoves) {
+            const player = this.players.get(id);
+            if (!player || !player.alive) continue;
+
+            const speed = player.stats.speed * TILE_SIZE * dt;
+
+            // Candidate new positions
+            const nx = player.x + move.dx * speed;
+            const ny = player.y + move.dy * speed;
+
+            // Check whether a circular bounding box of RADIUS at (px, py)
+            const collidesAt = (px, py) => {
+                const r = RADIUS - 1;
+                const corners = [
+                    [Math.floor((px - r) / TILE_SIZE), Math.floor((py - r) / TILE_SIZE)],
+                    [Math.floor((px + r) / TILE_SIZE), Math.floor((py - r) / TILE_SIZE)],
+                    [Math.floor((px - r) / TILE_SIZE), Math.floor((py + r) / TILE_SIZE)],
+                    [Math.floor((px + r) / TILE_SIZE), Math.floor((py + r) / TILE_SIZE)],
+                ];
+                return corners.some(([cx, cy]) => this._isSolidAt(cx, cy));
+            };
+
+            const clampX = (v) => Math.max(TILE_SIZE + RADIUS, Math.min((GRID_WIDTH - 1) * TILE_SIZE - RADIUS, v));
+            const clampY = (v) => Math.max(TILE_SIZE + RADIUS, Math.min((GRID_HEIGHT - 1) * TILE_SIZE - RADIUS, v));
+
+            const canX = !collidesAt(clampX(nx), player.y);
+            const canY = !collidesAt(player.x, clampY(ny));
+
+            if (canX) player.x = clampX(nx);
+            if (canY) player.y = clampY(ny);
+
+            player.tileX = Math.floor(player.x / TILE_SIZE);
+            player.tileY = Math.floor(player.y / TILE_SIZE);
+        }
+    }
+
+    _isSolidAt(x, y) {
+        if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) return true;
+        const t = this.grid[y][x];
+        return t === TILE.WALL || t === TILE.SOFT;
+    }
+
+    // Tick down bomb fuses, detonate expired bombs
+    _tickBombs(events) {
+        for (const [bombId, bomb] of this.bombs) {
+            bomb.ticksLeft--;
+            if (bomb.ticksLeft <= 0) {
+                this._detonateBomb(bombId, events);
+            }
+        }
+    }
+    
+    _detonateBomb(bombId, events) {
+        const bomb = this.bombs.get(bombId);
+        if (!bomb) return;
+        this.bombs.delete(bombId);
+
+        const owner = this.players.get(bomb.ownerId);
+        if (owner) owner.activeBombs = Math.max(0, owner.activeBombs - 1);
+
+        const affectedCells = [{ x: bomb.x, y: bomb.y }];
+        const piercingFlame = bomb.piercingFlame;
+
+        // Spread in 4 directions
+        for (const dir of Object.values(DIRECTIONS)) {
+            for (let i = 1; i <= bomb.range; i++) {
+                const cx = bomb.x + dir.dx * i;
+                const cy = bomb.y + dir.dy * i;
+                if (cx < 0 || cx >= GRID_WIDTH || cy < 0 || cy >= GRID_HEIGHT) break;
+                const tile = this.grid[cy][cx];
+                if (tile === TILE.WALL) break;
+                affectedCells.push({ x: cx, y: cy });
+                if (tile === TILE.SOFT) {
+                    this.grid[cy][cx] = TILE.EMPTY;
+                    // spawn power-up
+                    if (Math.random() < POWERUP_DROP_CHANCE) {
+                        const puType = ALL_POWERUPS[Math.floor(Math.random() * ALL_POWERUPS.length)];
+                        this.powerups.set(`${cx},${cy}`, puType);
+                    }
+                    if (!piercingFlame) break;
+                }
+            }
+        }
+
+        // Place fire on affected cells, chain detonate other bombs
+        for (const cell of affectedCells) {
+            const key = `${cell.x},${cell.y}`;
+            this.fires.set(key, { x: cell.x, y: cell.y, ticksLeft: FIRE_DURATION_TICKS });
+            // Chain reaction
+            for (const [otherId, other] of this.bombs) {
+                if (other.x === cell.x && other.y === cell.y) {
+                    this._detonateBomb(otherId, events);
+                }
+            }
+        }
+
+        events.explosions.push({ bombId, x: bomb.x, y: bomb.y, cells: affectedCells });
+    }
+
     tick(playerMoves) {
         if (this.gameOver) return { explosions: [], eliminated: [], powerupCollections: [] };
 

@@ -1,16 +1,19 @@
-import { MAX_PLAYERS, MIN_PLAYERS_TO_START, PLAYER_COLORS, CHARACTERS } from './constants.js';
-
+import { GameState } from './GameState.js';
+import {
+    MAX_PLAYERS, MIN_PLAYERS_TO_START, TICK_MS, PLAYER_COLORS, CHARACTERS,
+} from './constants.js';
 export class GameRoom {
-    constructor(code, hostId, hostNickname, io) {
+    constructor(code, hostId, hostNickname, io, hostUserId = null, hostRating = 1000, onGameOver = null) {
         this.code = code;
         this.hostId = hostId;
         this.io = io;
 
-        // Map<socketId, playerInfo>
         this.players = new Map();
         this.players.set(hostId, {
             id: hostId,
             nickname: hostNickname,
+            userId: hostUserId,
+            rating: hostRating,
             slotIndex: 0,
             character: CHARACTERS[0],
             color: PLAYER_COLORS[0],
@@ -18,13 +21,17 @@ export class GameRoom {
             isHost: true,
         });
 
-        this.phase = 'lobby';
+        this.phase = 'lobby'; // 'lobby' | 'game' | 'results'
+        this.gameState = null;
+        this._tickInterval = null;
+        this._onGameOver = onGameOver; 
+        this._pendingMoves = new Map();
     }
 
-    addPlayer(socketId, nickname) {
+    addPlayer(socketId, nickname, userId = null, rating = 1000) {
         if (this.phase !== 'lobby') return { success: false, error: 'Game already in progress' };
         if (this.players.size >= MAX_PLAYERS) return { success: false, error: 'Room is full' };
-        if ([...this.players.values()].some(p => p.nickname === nickname)) { //name already exists, append some random number
+        if ([...this.players.values()].some(p => p.nickname === nickname)) {
             nickname = nickname + Math.floor(Math.random() * 100);
         }
 
@@ -32,6 +39,8 @@ export class GameRoom {
         this.players.set(socketId, {
             id: socketId,
             nickname,
+            userId,
+            rating,
             slotIndex,
             character: CHARACTERS[slotIndex],
             color: PLAYER_COLORS[slotIndex],
@@ -194,6 +203,24 @@ export class GameRoom {
         for (const pu of events.powerupCollections) {
             this.io.to(this.code).emit('power_up_collected', pu);
         }
+    }
+
+    _buildScoreboard() {
+        if (!this.gameState) return [];
+        return [...this.gameState.players.values()].map(gp => {
+            const lobbyPlayer = this.players.get(gp.id) || {};
+            return {
+                id: gp.id,
+                nickname: lobbyPlayer.nickname || 'Unknown',
+                slotIndex: gp.slotIndex,
+                color: lobbyPlayer.color,
+                kills: gp.kills,
+                bombsPlaced: gp.bombsPlaced,
+                powerupsCollected: gp.powerupsCollected,
+                survivalTime: Math.round(gp.survivalTicks / 60),
+                won: gp.id === this.gameState.winnerId,
+            };
+        });
     }
 
     serializeLobby() {

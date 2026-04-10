@@ -3,12 +3,22 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { GameRoom } from './GameRoom.js';
+import 'dotenv/config';
+import { connectDB } from './config/db.js';
+import { verifySocketJWT } from './middleware/auth.js';
+import authRouter from './routes/auth.js';
+import { User } from './models/User.js';
 
 const PORT = process.env.PORT || 3001;
 
 const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
+
+
+app.get('/health', (_req, res) => res.json({ status: 'ok', rooms: rooms.size }));
+app.use('/api/auth', authRouter);
+
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -20,6 +30,8 @@ const rooms = new Map();
 
 // Map<socketId, roomCode> — track which room each socket is in
 const socketRoom = new Map();
+io.use(verifySocketJWT);
+
 
 // Utility
 
@@ -38,45 +50,88 @@ function broadcastRoomUpdate(room) {
     io.to(room.code).emit('room_update', room.serializeLobby());
 }
 
-// REST health check
-app.get('/health', (_req, res) => res.json({ status: 'ok', rooms: rooms.size }));
+async function updateRatings(winnerId, room) {
+    const DELTA = 25;
+    const ratingChanges = {}; // socketId -> { delta, newRating }
+
+    const updatePromises = [...room.players.values()].map(async (player) => {
+        if (!player.userId) return; 
+        const isWinner = player.id === winnerId;
+        const delta = isWinner ? DELTA : -DELTA;
+
+        try {
+            const updated = await User.findByIdAndUpdate(
+                player.userId,
+                { $inc: { rating: delta } },
+                { new: true }
+            );
+            if (updated) {
+                ratingChanges[player.id] = { delta, newRating: updated.rating };
+            }
+        } catch (err) {
+            console.error('[Rating] Update error for', player.username, err.message);
+        }
+    });
+
+    await Promise.all(updatePromises);
+
+    // Emit individual rating_update events
+    for (const [socketId, change] of Object.entries(ratingChanges)) {
+        io.to(socketId).emit('rating_update', change);
+    }
+}
 
 // Socket.io Events
 io.on('connection', (socket) => {
-    console.log(`Connected: ${socket.id}`);
+    console.log(`[+] Connected: ${socket.id} (${socket.user.username})`);
 
     // create_room
-    socket.on('create_room', ({ nickname } = {}, ack) => {
-        if (!nickname || typeof nickname !== 'string' || nickname.trim().length === 0) {
-            return ack?.({ success: false, error: 'Invalid nickname' });
-        }
-        const code = generateRoomCode();
-        const room = new GameRoom(code, socket.id, nickname.trim().slice(0, 20), io);
-        rooms.set(code, room);
-        socketRoom.set(socket.id, code);
-
-        socket.join(code);
-        broadcastRoomUpdate(room);
-        console.log(`[Room] ${code} created by ${socket.id}`);
-        ack?.({ success: true, code });
-    });
+    socket.on('create_room', async (_, ack) => {
+            const { userId, username } = socket.user;
+    
+            // Fetch current rating from DB
+            let rating = 1000;
+            try {
+                const user = await User.findById(userId).select('rating');
+                if (user) rating = user.rating;
+            } catch { /* non-critical */ }
+    
+            const code = generateRoomCode();
+            const room = new GameRoom(code, socket.id, username, io, userId, rating, updateRatings);
+            rooms.set(code, room);
+            socketRoom.set(socket.id, code);
+    
+            socket.join(code);
+            broadcastRoomUpdate(room);
+            console.log(`[Room] ${code} created by ${username}`);
+            ack?.({ success: true, code });
+        });
 
     // join_room
-    socket.on('join_room', ({ code, nickname } = {}, ack) => {
-        if (!code || !nickname) return ack?.({ success: false, error: 'Missing fields' });
-        const upperCode = code.toUpperCase();
-        const room = rooms.get(upperCode);
-        if (!room) return ack?.({ success: false, error: 'Room not found' });
-
-        const result = room.addPlayer(socket.id, nickname.trim().slice(0, 20));
-        if (!result.success) return ack?.({ success: false, error: result.error });
-
-        socketRoom.set(socket.id, upperCode);
-        socket.join(upperCode);
-        broadcastRoomUpdate(room);
-        console.log(`[Room] ${socket.id} joined ${upperCode}`);
-        ack?.({ success: true, code: upperCode });
-    });
+    socket.on('join_room', async ({ code } = {}, ack) => {
+            if (!code) return ack?.({ success: false, error: 'Missing room code' });
+            const upperCode = code.toUpperCase();
+            const room = rooms.get(upperCode);
+            if (!room) return ack?.({ success: false, error: 'Room not found' });
+    
+            const { userId, username } = socket.user;
+    
+            // Fetch current rating from DB
+            let rating = 1000;
+            try {
+                const user = await User.findById(userId).select('rating');
+                if (user) rating = user.rating;
+            } catch { /* non-critical */ }
+    
+            const result = room.addPlayer(socket.id, username, userId, rating);
+            if (!result.success) return ack?.({ success: false, error: result.error });
+    
+            socketRoom.set(socket.id, upperCode);
+            socket.join(upperCode);
+            broadcastRoomUpdate(room);
+            console.log(`[Room] ${username} joined ${upperCode}`);
+            ack?.({ success: true, code: upperCode });
+        });
 
     // player_ready
     socket.on('player_ready', () => {
@@ -186,6 +241,14 @@ io.on('connection', (socket) => {
         });
     });
 
+    socket.on('player_taunt', ({ taunt } = {}) => {
+        const room = _getRoom(socket.id);
+        if (!room) return;
+        const player = room.players.get(socket.id);
+        if (!player) return;
+        io.to(room.code).emit('player_taunt', { playerId: socket.id, nickname: player.nickname, taunt });
+    });
+
     socket.on('disconnect', () => {
         console.log(`Disconnected: ${socket.id} (${socket.user?.username})`);
         const room = _getRoom(socket.id);
@@ -204,6 +267,11 @@ io.on('connection', (socket) => {
 });
 
 // Start
-httpServer.listen(PORT, () => {
-    console.log(`BOMB CHAOS server running on http://localhost:${PORT}`);
-});
+async function start() {
+    await connectDB();
+    httpServer.listen(PORT, () => {
+        console.log(`BOMB CHAOS server running on http://localhost:${PORT}`);
+    });
+}
+
+start();

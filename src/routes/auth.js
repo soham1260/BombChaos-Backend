@@ -1,6 +1,9 @@
+import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { User } from '../models/User.js';
+
+const router = Router();
 
 function signToken(user) {
     return jwt.sign(
@@ -41,3 +44,31 @@ router.post('/register', async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
+
+// POST /api/auth/login
+router.post('/login', async (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    try {
+        const user = await User.findOne({ username: username.trim() });
+        if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+
+        const valid = await bcrypt.compare(password, user.password);
+        if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+
+        const token = signToken(user);
+        res.json({
+            token,
+            user: { userId: user._id.toString(), username: user.username, rating: user.rating },
+        });
+    } catch (err) {
+        console.error('[Auth] Login error:', err.message);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+export default router;

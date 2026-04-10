@@ -28,8 +28,7 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Package lock files (optional, if you want to ignore)
-package-lock.json
+# Package lock files
 yarn.lock
 
 # Coverage directory

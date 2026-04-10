@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -19,6 +20,9 @@
     "uuid": "^9.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "jest": "^30.3.0",
+    "mongodb-memory-server": "^11.0.1",
+    "nodemon": "^3.0.1",
+    "supertest": "^7.2.2"
   }
 }

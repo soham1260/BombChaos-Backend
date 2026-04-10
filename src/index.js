@@ -43,7 +43,7 @@ app.get('/health', (_req, res) => res.json({ status: 'ok', rooms: rooms.size }))
 
 // Socket.io Events
 io.on('connection', (socket) => {
-    console.log(`[+] Connected: ${socket.id}`);
+    console.log(`Connected: ${socket.id}`);
 
     // create_room
     socket.on('create_room', ({ nickname } = {}, ack) => {
@@ -115,9 +115,95 @@ io.on('connection', (socket) => {
         const code = socketRoom.get(socketId);
         return code ? rooms.get(code) : null;
     }
+
+    // player_move
+    socket.on('player_move', (move) => {
+        const room = _getRoom(socket.id);
+        if (!room || room.phase !== 'game') return;
+        room.queueMove(socket.id, move);
+    });
+
+    // place_bomb
+    socket.on('place_bomb', () => {
+        const room = _getRoom(socket.id);
+        if (!room || room.phase !== 'game') return;
+        const bomb = room.placeBomb(socket.id);
+        if (bomb) {
+            io.to(room.code).emit('bomb_placed', bomb);
+        }
+    });
+
+    // detonate_bomb
+    socket.on('detonate_bomb', () => {
+        const room = _getRoom(socket.id);
+        if (!room || room.phase !== 'game') return;
+        room.detonateRemote(socket.id);
+    });
+
+    // return_to_lobby
+    socket.on('return_to_lobby', () => {
+        const room = _getRoom(socket.id);
+        if (!room) return;
+        if (socket.id !== room.hostId) return;
+        room.phase = 'lobby';
+        room.gameState = null;
+        for (const player of room.players.values()) {
+            player.ready = false;
+        }
+        broadcastRoomUpdate(room);
+        console.log(`[Room] ${room.code} returned to lobby`);
+    });
+
+    // leave_room
+    socket.on('leave_room', () => {
+        const room = _getRoom(socket.id);
+        if (!room) return;
+
+        const { empty } = room.removePlayer(socket.id);
+        socketRoom.delete(socket.id);
+        socket.leave(room.code);
+
+        if (empty) {
+            rooms.delete(room.code);
+            console.log(`[Room] ${room.code} destroyed (empty after leave)`);
+        } else {
+            broadcastRoomUpdate(room);
+            console.log(`[Room] ${socket.id} voluntarily left ${room.code}`);
+        }
+    });
+
+    // chat_message
+    socket.on('chat_message', ({ text } = {}) => {
+        const room = _getRoom(socket.id);
+        if (!room || !text || typeof text !== 'string') return;
+        const player = room.players.get(socket.id);
+        if (!player) return;
+        io.to(room.code).emit('chat_message', {
+            nickname: player.nickname,
+            color: player.color,
+            text: text.trim().slice(0, 200),
+            timestamp: Date.now(),
+        });
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`Disconnected: ${socket.id} (${socket.user?.username})`);
+        const room = _getRoom(socket.id);
+        if (!room) return;
+
+        const { empty } = room.removePlayer(socket.id);
+        socketRoom.delete(socket.id);
+
+        if (empty) {
+            rooms.delete(room.code);
+            console.log(`[Room] ${room.code} destroyed (empty)`);
+        } else {
+            broadcastRoomUpdate(room);
+        }
+    });
 });
 
 // Start
 httpServer.listen(PORT, () => {
-    console.log(`🚀 BOMB CHAOS server running on http://localhost:${PORT}`);
+    console.log(`BOMB CHAOS server running on http://localhost:${PORT}`);
 });

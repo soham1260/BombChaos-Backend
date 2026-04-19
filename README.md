@@ -68,13 +68,25 @@ cd BombChaos-Backend
 npm install
 ```
 
-3. Optionally create a `.env` file:
+3. Create a `.env` file:
+
+## Environment Variables
+
+The backend expects the following environment variables to be set:
+
+| Variable | Required | Description | Default |
+|----------|----------|------------|---------|
+| `PORT` | Optional | Port used by the backend server | `3001` |
+| `MONGO_URI` | Yes (for auth features) | MongoDB connection string | — |
+| `JWT_SECRET` | Yes (for auth features) | Secret key used for signing JWT tokens | — |
+
+### Example `.env` file
 
 ```env
 PORT=3001
+MONGO_URI=your_mongodb_connection_string
+JWT_SECRET=your_secret_key
 ```
-
-If `PORT` is not set, the server runs on `3001`.
 
 ## Available Scripts
 
